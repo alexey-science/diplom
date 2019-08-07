@@ -1,0 +1,1782 @@
+<?php
+
+function authorsArtToDB($pdo, $jsonarr, $sid)
+{   $authorsart = array();
+    foreach ($jsonarr as $item) {
+        $json = json_decode($item, true);
+        foreach ($json['articles']['items'] as $i) {
+            $authors = explode(', ', $i['authors']);
+            foreach ($authors as $a) {
+                if ($a) {
+                    $author = $a;
+                } else {
+                    $author = 'Без автора';
+                }
+                if (isset($authorsart[$author])) {
+                    $authorsart[$author] += 1;
+
+                } else {
+                    $authorsart[$author] = 1;
+                }
+            }
+
+        }
+    }
+
+    try{
+        $sql = 'INSERT INTO author_art SET 
+                service = "clen",
+                sid = :sid,
+                author = :author,
+                countart = :countart';
+        foreach ($authorsart as $key => $item) {
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':author', $key);
+            $s->bindValue(':countart', $item);
+            $s->execute();
+        }
+
+    }catch (PDOException $e){
+        include_once  $_SERVER['DOCUMENT_ROOT'] . '/includes/error_db.php';
+        set_error("Ошабка бд при работае с author", $e);
+        exit();
+    }
+
+
+
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $nojson
+ * @param int $sid
+ */
+function other_infoClen($pdo, $nojson, $sid){
+    $json = json_decode($nojson, true);
+
+    try{
+        $sql = 'INSERT INTO other_info SET 
+                service = "clen",
+                sid = :sid,
+                name_index = :nindex,
+                value_index = :vindex';
+        foreach ($json['articles']['aggs']['catalogs'] as $item) {
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':nindex', 'Число статей в ' . $item['name']);
+            $s->bindValue(':vindex', $item['count']);
+            $s->execute();
+
+        }
+    }catch (PDOException $e){
+        include_once  $_SERVER['DOCUMENT_ROOT'] . '/includes/error_db.php';
+        set_error("Ошабка бд при работае с oInfo", $e);
+        exit();
+    }
+
+
+}
+
+/**
+ * @param PDO $pdo
+ * @param array $jsonarr
+ * @param int $sid
+ */
+function yearsArtToDB($pdo, $jsonarr, $sid){
+    $yearsart = array();
+
+    foreach ($jsonarr as $item) {
+        $json = json_decode($item, true);
+        foreach ($json['articles']['items'] as $i) {
+            $year = $i['year'];
+            if (isset($yearsart[$year])) {
+                $yearsart[$year] += 1;
+            } else {
+                $yearsart[$year] = 1;
+            }
+        }
+    }
+
+    try{
+        $sql = 'INSERT INTO years_art SET 
+                service = "clen",
+                sid = :sid,
+                years = :years,
+                countart = :countart';
+        foreach ($yearsart as $key => $item) {
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':years', $key);
+            $s->bindValue(':countart', $item);
+            $s->execute();
+        }
+
+    }catch (PDOException $e){
+        include_once  $_SERVER['DOCUMENT_ROOT'] . '/includes/error_db.php';
+        set_error("Ошабка бд при работае с years", $e);
+        exit();
+    }
+
+}
+
+function parseClenOrg()
+{
+    $rootDir = $_SERVER['DOCUMENT_ROOT'];
+    include_once($rootDir . '/includes/dbconnect.php');
+    include_once($rootDir . '/includes/main_data.php');
+    $pdo = db_connect();
+    $page = 1;
+    $jsonarr = array();
+    $query = trim($_POST['qtext'], '"');
+    $uq_id = $_POST['uq_id'];
+    $link = 'http://cyberleninka.ru/search#';
+
+
+    do {
+        $curl = curl_init($link);
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_POST, true);
+        curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2687.0 Safari/537.36 OPR/38.0.2205.0 (Edition developer)');
+        curl_setopt($curl, CURLOPT_POSTFIELDS, 'query="'. $query .'"&terms=&catalogs=&page=' . $page);
+        $out = curl_exec($curl);
+        curl_close($curl);
+
+        $jsonarr[] = $out;
+        $page += 1;
+        $it = json_decode($out, true);
+    } while ((count($it['articles']['items']) > 0) and ($page <= 403));
+
+
+    $sid = set_clenMainData($pdo, $query, $link . 'query="'. $query .'"', '0','0','0',$uq_id );
+    yearsArtToDB($pdo, $jsonarr, $sid);
+    authorsArtToDB($pdo, $jsonarr, $sid);
+    other_infoClen($pdo, $jsonarr[0], $sid);
+}
+
+IF (isset($_POST['setClen'])){
+    ob_end_clean();
+    ignore_user_abort();
+    ob_start();
+    header("Connection: close");
+    header("Content-Length: " . ob_get_length());
+    ob_end_flush();
+    flush();
+    sleep(5);
+    parseClenOrg();
+}
+
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Алексей Колташев
+ * Date: 24.04.2016
+ * Time: 16:16
+**/
+
+function addClenUser($link, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once $dir  . '/includes/simple_html_dom.php';
+    include_once $dir . '/includes/dbconnect.php';
+    include_once  $dir . '/includes/main_data.php';
+    $pdo = db_connect();
+    $html = new simple_html_dom();
+    $page = 1;
+    $ya = array();
+
+
+    do{
+
+        $html->load_file($link . '?page=' . $page);
+        $div = $html->find('div[class=content-general] div[class=general-block] div[class=general-block content-general02]');
+        foreach ($div as $d) {
+            $str = $d->find('div[class=block-inner] div[class=text-inner] span',0)->plaintext;
+            $py = explode('/', $str);
+            $y = $py[0];
+            $ya[$y] = isset($ya[$y])? $ya[$y] + 1 : 1;
+
+        }
+
+        $page++;
+    } while(count($div) > 0);
+    //Получаем имя Ученого
+    $unarr = $html->find('div[id=content] div[class=content-row] h1',0)->plaintext;
+    $unarr = trim($unarr);
+    $unarr = explode(' ', $unarr);
+    $username = $unarr[0] . ' ' . $unarr[1] . ' ' . $unarr[2];
+
+    //Получаем количетсво скачиваний, просмотров, избранное
+    $statsarr = $html->find('div[class=stats-block] ul li');
+    $download = $statsarr[0]->find('div[class=stats-num]',0)->plaintext;
+    $view = $statsarr[1]->find('div[class=stats-num]',0)->plaintext;
+    $fav = $statsarr[2]->find('div[class=stats-num]',0)->plaintext;
+
+    $sid = set_clenMainData($pdo,$username,$link,$download,$view,$fav,$uq_id);
+
+
+        try{
+            $sql = 'INSERT INTO years_art SET
+             service = "clen",
+             sid = :sid,
+             years = :years,
+             countart = :countart;';
+            foreach ($ya as $key => $value) {
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':years', $key);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':countart', $value);
+            $s->execute();
+            }
+
+        }catch(PDOException $e){
+            include_once $dir . '/includes/error_db.php';
+            set_error('Ошибка бд в addClenUser', $e);
+            exit();
+        }
+
+}
+
+if(isset($_POST['setClenUser'])){
+
+    $link = $_POST['clenref'];
+    $uq_id = $_POST['uq_id'];
+    //ob_end_clean();
+    ignore_user_abort();
+    ob_start();
+    header("Connection: close");
+    header("Content-Length: " . ob_get_length());
+    ob_end_flush();
+    flush();
+    sleep(5);
+    set_time_limit(0);
+    $link = trim($link, ' \"\'\r\n\t\0\x0B');
+    $link = explode('?',$link);
+    $link = $link[0];
+    addClenUser($link, $uq_id);
+}
+
+<?php
+
+function curl_start($link)
+{
+    $ch = curl_init($link);
+
+    $coo = 'cookie/coo.txt';
+    $data="";
+
+    curl_setopt($ch, CURLOPT_COOKIESESSION, 1);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/49.0.2623.112 Safari/537.36');
+    curl_setopt($ch, CURLOPT_FRESH_CONNECT, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+
+    curl_setopt($ch, CURLOPT_HEADER, 0);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+    curl_setopt($ch, CURLOPT_ENCODING, "");
+
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+    curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+    curl_setopt($ch, CURLOPT_AUTOREFERER, 1);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_COOKIEJAR, $coo);
+    curl_setopt($ch, CURLOPT_COOKIEFILE, $coo);
+
+
+    $filename = curl_exec($ch);
+//Закрываем cURL-сессию
+    curl_close($ch);
+//Закрываем дексриптор файла
+    return $filename;
+}
+
+
+
+/**
+ * @param PDO $pdo
+ * @param int $sid
+ * @param int $refid
+ */
+function set_author($pdo, $sid, $refid){
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/simple_html_dom.php";
+    $link = "http://elibrary.ru/org_profile2_authors.asp?id=" . $refid;
+    $filename = curl_start($link);
+    $html =  str_get_html($filename);
+    $arrauth = array();
+    $fo = $html->find('table[id=restab] tr[valign=top] td[class=midtext]');
+    for($i=0; $i<count($fo); $i+=3){
+        $arrauth[trim($fo[$i+1]->plaintext,'&nbsp;')] = trim($fo[$i+2]->plaintext,'&nbsp;');
+    }
+    try{
+        $sql = 'INSERT INTO author_art SET 
+                service = "elib",
+                sid = :sid,
+                author = :author,
+                countart = :countart;';
+        foreach ($arrauth as $key => $item){
+           $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':author', $key);
+            $s->bindValue(':countart', $item);
+            $s->execute();
+        }
+
+
+    }catch (PDOException $e) {
+        include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/error_db.php";
+        set_error("Ошибка бд при обработке setAuthor", $e);
+        exit();
+    }
+}
+
+/**
+ * @param PDO $pdo
+ * @param int $sid
+ * @param  int  $refid
+ * @param simple_html_dom $html
+ */
+function other_info($pdo, $sid, $refid, $html){
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/simple_html_dom.php";
+
+    $table = $html->find('table[width=580]', 3);
+    $el = $table->find('td font');
+    $arrother = array();
+    for ($i = 0; $i < count($el); $i += 2) {
+        $namei = trim($el[$i]->plaintext, '&nbsp;');
+        if($namei === "Число статей в российских журналах из перечня ВАК"
+            or $namei === "Число статей в журналах, входящих в RSCI"
+            or $namei === "Число статей в журналах, входящих в Web of Science или Scopu"
+            or $namei === "Число статей в журналах, входящих в ядро РИНЦ"){
+        $arrother[$namei] = trim($el[$i + 1]->plaintext, '&nbsp;');
+        }
+    }
+    $link = "http://elibrary.ru/org_profile2_citednum.asp?id=" . $refid;
+    $filehtml = curl_start($link);
+    $html =  str_get_html($filehtml);
+    $allcited = 0;
+    $fo = $html->find('table[id=restab] tr[valign=top] td[class=midtext]');
+
+    for($i=0; $i<count($fo); $i+=2){
+        $allcited += (int) trim($fo[$i]->plaintext,'&nbsp;') * (int)trim($fo[$i+1]->plaintext,'&nbsp;');
+    }
+    try{
+        $sql = 'INSERT INTO other_info SET 
+                service = "elib",
+                sid = :sid,
+                name_index = :nindex,
+                value_index = :vindex;';
+        foreach($arrother as $key => $item){
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':nindex', $key);
+            $s->bindValue(':vindex', $item);
+            $s->execute();
+        }
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':sid', $sid);
+        $s->bindValue(':nindex', 'Всего цитирований');
+        $s->bindValue(':vindex', $allcited);
+        $s->execute();
+    }catch (PDOException $e) {
+        include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/error_db.php";
+        set_error("Ошибка бд при обработке other-Info", $e);
+        exit();
+    }
+}
+
+function set_years($pdo, $sid, $refid){
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/simple_html_dom.php";
+
+    $link = "http://elibrary.ru/org_profile2_years.asp?id=" . $refid;
+    $filename = curl_start($link);
+    $html =  str_get_html($filename);
+    $arryears = array();
+    $fo = $html->find('table[id=restab] tr[valign=top] td[class=midtext]');
+
+    for($i=0; $i<count($fo); $i+=2){
+        $arryears[trim($fo[$i]->plaintext,'&nbsp;')] = trim($fo[$i+1]->plaintext,'&nbsp;');
+    }
+
+    try{
+        $sql = 'INSERT INTO years_art SET 
+                service = "elib",
+                sid = :sid,
+                years = :years,
+                countart = :countart;';
+        foreach ($arryears as $key => $item){
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':years', $key);
+            $s->bindValue(':countart', $item);
+            $s->execute();
+        }
+
+
+    }catch (PDOException $e) {
+        include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/error_db.php";
+        set_error("Ошибка бд при обработке setYears", $e);
+        exit();
+    }
+
+    }
+
+function mainElib()
+{
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/simple_html_dom.php";
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/main_data.php";
+    include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/dbconnect.php";
+
+    $pdo = db_connect();
+    $refid = $_POST['ref_id'];
+    $uq_id = $_POST['uq_id'];
+    $link = "http://elibrary.ru/org_profile.asp?id=" . $refid;
+    $filename = curl_start($link);
+    $html = str_get_html($filename);
+    $table = $html->find('table[width=580]', 2);
+    $name = $html->find('table[width=580]', 1)->find('font[color=#F26C4F] b', 0)->plaintext;
+    $el = $table->find('td font');
+    $aboutorg = array();
+    for ($i = 0; $i < count($el); $i += 2) {
+        $aboutorg[trim($el[$i]->plaintext, '&nbsp;')] = trim($el[$i + 1]->plaintext, '&nbsp;');
+    }
+
+    $sid = set_elibMainData($pdo,$name,$refid,$aboutorg['h-индекс (индекс Хирша)'], $uq_id);
+    set_author($pdo, $sid, $refid);
+    set_years($pdo, $sid, $refid);
+    other_info($pdo, $sid , $refid , $html);
+
+}
+
+
+if(isset($_POST['setElib'])){
+    ob_end_clean();
+    ignore_user_abort();
+    ob_start();
+    header("Connection: close");
+    header("Content-Length: " . ob_get_length());
+    ob_end_flush();
+    flush();
+    sleep(5);
+    mainElib();
+}
+//echo date('y.m.d  s');
+
+<?php
+
+function curl_start($link)
+{
+    $ch = curl_init($link);
+    $coo = 'coo.txt';
+
+    curl_setopt($ch, CURLOPT_COOKIESESSION, 1);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/49.0.2623.112 Safari/537.36');
+    curl_setopt($ch, CURLOPT_FRESH_CONNECT, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+
+    curl_setopt($ch, CURLOPT_HEADER, 0);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
+    curl_setopt($ch, CURLOPT_ENCODING, "");
+
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+    curl_setopt($ch, CURLOPT_FAILONERROR, 1);
+    curl_setopt($ch, CURLOPT_AUTOREFERER, 1);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_COOKIEJAR, $coo);
+    curl_setopt($ch, CURLOPT_COOKIEFILE, $coo);
+
+    $fp = curl_exec($ch);
+//Закрываем cURL-сессию
+    curl_close($ch);
+    return $fp;
+}
+
+/**
+ * @param PDO $pdo
+ * @param int $ref_id
+ * @param int $sid
+ */
+function set_years($pdo, $ref_id, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once $dir . "/includes/simple_html_dom.php";
+    include_once $dir . "/includes/dbconnect.php";
+    $link = 'http://elibrary.ru/author_profile_new_years.asp?id=' . $ref_id;
+    $fp = curl_start($link);
+    $html = str_get_html($fp);
+    $arryears = array();
+    $fo = $html->find('table[id=restab] tr[valign=top] td[class=midtext]');
+
+    for($i=0; $i<count($fo); $i+=2){
+        $arryears[trim($fo[$i]->plaintext,'&nbsp;')] = trim($fo[$i+1]->plaintext,'&nbsp;');
+    }
+
+//    foreach($arryears as $key => $item){
+//            echo $key . ' ' . $item . '<br>';
+//    }
+
+    try{
+        $sql = 'INSERT INTO years_art SET 
+                service = "elib",
+                sid = :sid,
+                years = :years,
+                countart = :countart';
+        foreach($arryears as $key => $item){
+
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':years',  $key);
+            $s->bindValue(':countart', $item);
+            $s->execute();
+        }
+
+
+    }catch (PDOException $e) {
+        include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/error_db.php";
+        set_error("Ошибка бд при обработке setYearsUser", $e);
+        exit();
+    }
+
+
+
+}
+
+function set_quotes($pdo, $ref_id, $sid)
+{
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once $dir . "/includes/simple_html_dom.php";
+    include_once $dir . "/includes/dbconnect.php";
+    $link = 'http://elibrary.ru/author_profile_new_ref_syears.asp?id=' . $ref_id;
+    $fp = curl_start($link);
+    $html = str_get_html($fp);
+    $arrq = array();
+    $fo = $html->find('table[id=restab] tr[valign=top] td[class=midtext]');
+
+    for ($i = 0; $i < count($fo); $i += 2) {
+        $arrq[trim($fo[$i]->plaintext, '&nbsp;')] = trim($fo[$i + 1]->plaintext, '&nbsp;');
+    }
+
+    try{
+        $sql = 'INSERT INTO quotes_art SET 
+                service = "elib",
+                sid = :sid,
+                yearsquotes = :yearsq,
+                countquotes = :countq;';
+        foreach($arrq as $key => $item){
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':yearsq', $key);
+            $s->bindValue(':countq', $item);
+            $s->execute();
+        }
+
+
+    }catch (PDOException $e) {
+        include_once $_SERVER['DOCUMENT_ROOT'] . "/includes/error_db.php";
+        set_error("Ошибка бд при обработке setQuotesUser", $e);
+        exit();
+    }
+
+
+}
+
+function mainElibUser($elibId, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once $dir . "/includes/simple_html_dom.php";
+    include_once $dir . "/includes/dbconnect.php";
+    include_once $dir . "/includes/main_data.php";
+    $pdo = db_connect();
+
+    $link = 'http://elibrary.ru/author_profile.asp?id=' . $elibId;
+    $fp = curl_start($link);
+    $html = str_get_html($fp);
+    $table = $html->find('table[width=580]', 2);
+    $el = $table->find('td font');
+    $aboutorg = array();
+    for ($i = 15; $i < 29; $i += 2) {
+        $aboutorg[trim($el[$i]->plaintext, '&nbsp;')] = trim($el[$i + 1]->plaintext, '&nbsp;');
+    }
+    $hindex = $aboutorg['Индекс Хирша'];
+    $un = $html->find('FORM[name=results]',0)->find('table tbody',0)->find('tr',2)->find('td',0)->find('table',0)->find('font b',0);
+    $sid = set_elibMainData($pdo,$un,$elibId,$hindex,$uq_id);
+    set_years($pdo, $elibId, $sid);
+    set_quotes($pdo, $elibId, $sid);
+}
+
+if(isset($_POST['setElibUser'])){
+    $elibId = $_POST['ref_id'];
+    $uq_id = $_POST['uq_id'];
+    ob_end_clean();
+    ignore_user_abort();
+    ob_start();
+    header("Connection: close");
+    header("Content-Length: " . ob_get_length());
+    ob_end_flush();
+    flush();
+    sleep(5);
+    mainElibUser($elibId, $uq_id);
+}
+
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Aleksei Koltashev
+ * Date: 09.05.2016
+ * Time: 15:19
+ */
+
+function set_gs($link, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once($dir . '/includes/dbconnect.php');
+    include_once($dir . '/includes/simple_html_dom.php');
+    include_once($dir . '/includes/main_data.php');
+    $html = new simple_html_dom();
+    $pagesize = 100;
+    $cstart = 0;
+    $years = array();
+    $htmlarr = array();
+    $count = 0;
+    $userName= '';
+    $yearquotes = array();
+    do{
+        $url = $link . '&cstart=' . $cstart . '&pagesize=' . $pagesize;
+        $html->load_file($url);
+        $pr = new simple_html_dom();
+        $pr->load($html);
+        $htmlarr[] = $pr;
+        $carr = $html->find('span[id=gsc_a_nn]',0)->plaintext;
+        $ca = explode('&ndash;',$carr);
+        $count = $ca[1];
+        $cstart += $pagesize;
+
+    }while(!($count < $cstart));
+
+    $userName = $html->find('div[id=gsc_prf_in]',0)->plaintext;
+    $hindex = $html->find('table[id=gsc_rsb_st] tr', 2)->find('td.gsc_rsb_std',0)->plaintext;
+    $pdo = db_connect();
+
+    $sid = set_gsMainData($pdo, $link, $userName, $hindex, $uq_id);
+    foreach($htmlarr as $page) {
+        $artArr = $page->find('tr.gsc_a_tr span.gsc_a_h');
+        foreach ($artArr as $item) {
+            $yearText =  $item->plaintext;
+            if(strlen($yearText)>1){
+                $years[$yearText] +=1;
+            }
+        }
+    }
+
+
+    try{
+        $sql = 'INSERT INTO years_art SET
+                    service = "gs",
+                    sid = :sid,
+                    years = :years,
+                    countart = :countart';
+        foreach ($years as $key => $year){
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':years', $key);
+            $s->bindValue(':countart', $year);
+
+            $s->execute();
+        }
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд в gs ya', $e);
+        exit();
+
+
+    }
+
+
+    //Получение информации о цитированиии
+    $pryq = $html->find('div[id=gsc_g_x] span.gsc_g_t');
+    $i = 0;
+
+
+    try{
+        $sql = 'INSERT INTO quotes_art SET
+                    service = "gs",
+                    sid = :sid,
+                    yearsquotes = :yearsq,
+                    countquotes = :countq';
+        foreach($pryq as $y){
+            $yr = $y->plaintext;
+            $cq= $html->find('div[id=gsc_g_bars] span.gsc_g_al',$i)->plaintext;
+            $i++;
+
+            $s = $pdo->prepare($sql);
+            $s->bindValue(':sid', $sid);
+            $s->bindValue(':yearsq', $yr);
+            $s->bindValue(':countq', $cq);
+
+            $s->execute();
+        }
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд в gs qa', $e);
+        exit();
+    }
+
+
+}
+
+if(isset($_POST['setgsUser'])){
+    $link = $_POST['gsref'];
+    $uq_id = $_POST['uq_id'];
+    // ob_end_clean();
+    ignore_user_abort();
+    ob_start();
+    header("Connection: close");
+    header("Content-Length: " . ob_get_length());
+    ob_end_flush();
+    flush();
+    sleep(5);
+    set_time_limit(0);
+
+    $link = trim($link, ' \"\'\r\n\t\0\x0B');
+    set_gs($link, $uq_id);
+}
+
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Alekse Koltashev
+ * Date: 27.04.2016
+ * Time: 21:12
+ */
+/**
+ * @param PDO $pdo
+ * @param string $username
+ * @param  string $email
+ * @param  string $pass
+ * @param  string $typeacc
+ * @return integer
+ */
+function registry_user($pdo, $username, $email, $pass){
+    try{
+        $sql = 'INSERT INTO users SET
+                email = :email,
+                name = :name,
+                pass = :pass;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->bindValue(':name', $username);
+        $s->bindValue(':pass', $pass);
+
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка добавления новго пользователя ', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+
+/**
+ * @param PDO $pdo
+ * @param string $name
+ * @param  string $gs_ref
+ * @param string $clen_ref
+ * @param string $elib_ref
+ * @param int $priorq,
+ * @param int $typeq,
+ * @param int $user_id
+ * @return int
+ */
+function registry_userquery($pdo,$name,$gs_ref,$clen_ref, $elib_ref,$priorq , $typeq, $user_id){
+    try{
+        $sql = 'INSERT INTO users_query SET
+                name = :name,
+                gs_ref = :gs_ref,
+                clen_ref = :clen_ref,
+                elib_ref = :elib_ref,
+                priorq = :priorq,
+                typeq = :typeq,
+                user_id = :user_id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':name', $name);
+        $s->bindValue(':gs_ref', $gs_ref);
+        $s->bindValue(':clen_ref', $clen_ref);
+        $s->bindValue(':elib_ref', $elib_ref);
+        $s->bindValue(':priorq', $priorq);
+        $s->bindValue(':typeq', $typeq);
+        $s->bindValue(':user_id', $user_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка добавления новго пользователя ', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  string $email
+ * @return boolean
+ */
+function isValid_email($pdo, $email){
+    try{
+        $sql = 'SELECT COUNT(*) AS col FROM users WHERE email = :email';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка БД при провекри емайла пользователя ', $e);
+        exit();
+    }
+
+    $row = $s->fetch();
+    if($row['col'] > 0){
+        return false;
+    }else{
+        return true;
+    }
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $email
+ * @param string $pass
+ * @return array
+ */
+function login($pdo, $email, $pass){
+    try{
+        $sql = 'SELECT * FROM users WHERE email = :email and pass = :pass;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->bindValue(':pass', $pass);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка БД при проверки пользователя ', $e);
+        exit();
+    }
+
+    return $s->fetch();
+}
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Alekse Koltashev
+ * Date: 27.04.2016
+ * Time: 21:12
+ */
+/**
+ * @param PDO $pdo
+ * @param string $username
+ * @param  string $email
+ * @param  string $pass
+ * @param  string $typeacc
+ * @return integer
+ */
+function registry_user($pdo, $username, $email, $pass){
+    try{
+        $sql = 'INSERT INTO users SET
+                email = :email,
+                name = :name,
+                pass = :pass;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->bindValue(':name', $username);
+        $s->bindValue(':pass', $pass);
+
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка добавления новго пользователя ', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+
+/**
+ * @param PDO $pdo
+ * @param string $name
+ * @param  string $gs_ref
+ * @param string $clen_ref
+ * @param string $elib_ref
+ * @param int $priorq,
+ * @param int $typeq,
+ * @param int $user_id
+ * @return int
+ */
+function registry_userquery($pdo,$name,$gs_ref,$clen_ref, $elib_ref,$priorq , $typeq, $user_id){
+    try{
+        $sql = 'INSERT INTO users_query SET
+                name = :name,
+                gs_ref = :gs_ref,
+                clen_ref = :clen_ref,
+                elib_ref = :elib_ref,
+                priorq = :priorq,
+                typeq = :typeq,
+                user_id = :user_id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':name', $name);
+        $s->bindValue(':gs_ref', $gs_ref);
+        $s->bindValue(':clen_ref', $clen_ref);
+        $s->bindValue(':elib_ref', $elib_ref);
+        $s->bindValue(':priorq', $priorq);
+        $s->bindValue(':typeq', $typeq);
+        $s->bindValue(':user_id', $user_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка добавления новго пользователя ', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  string $email
+ * @return boolean
+ */
+function isValid_email($pdo, $email){
+    try{
+        $sql = 'SELECT COUNT(*) AS col FROM users WHERE email = :email';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка БД при провекри емайла пользователя ', $e);
+        exit();
+    }
+
+    $row = $s->fetch();
+    if($row['col'] > 0){
+        return false;
+    }else{
+        return true;
+    }
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $email
+ * @param string $pass
+ * @return array
+ */
+function login($pdo, $email, $pass){
+    try{
+        $sql = 'SELECT * FROM users WHERE email = :email and pass = :pass;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':email', $email);
+        $s->bindValue(':pass', $pass);
+        $s->execute();
+    }catch(PDOException $e){
+        include 'error_db.php';
+        set_error('Ошибка БД при проверки пользователя ', $e);
+        exit();
+    }
+
+    return $s->fetch();
+}
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Aleksei Koltashev
+ * Date: 27.04.2016
+ * Time: 14:16
+ */
+function set_error($text_msg, $info){
+    $error = $text_msg . ' ' . $info->getMessage();
+    include $_SERVER['DOCUMENT_ROOT'] . '/templates/error.html.php';
+    exit();
+}
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Aleksei Koltashev
+ * Date: 28.05.2016
+ * Time: 20:25
+ */
+
+/**
+ * @param $html
+ */
+mb_internal_encoding("UTF-8");
+function HTML_to_CSV($htmlStr, $filename){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    include_once $dir . '/includes/simple_html_dom.php';
+    $html = new simple_html_dom();
+    $html->load($htmlStr);
+    $arrTr = $html->find('td');
+    $filecsv = fopen($dir . '/gen_files/' . iconv("utf-8","windows-1251" , $filename) . '.csv','w');
+    for($i=0; $i < count($arrTr); $i+=2){
+        fwrite($filecsv, iconv("utf-8","windows-1251",$arrTr[$i]->plaintext) . ';');
+        fwrite($filecsv,iconv("utf-8","windows-1251",$arrTr[$i+1]->plaintext));
+        fwrite($filecsv, PHP_EOL);
+    }
+
+    fclose($filecsv);
+    return './gen_files/' . iconv("utf-8","windows-1251" , $filename) . '.csv';
+}
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Aleksei Koltashev
+ * Date: 06.05.2016
+ * Time: 21:14
+ */
+
+/**
+ * @param  PDO $pdo
+ * @param string $name
+ * @param string $ref
+ * @param int $downloads
+ * @param int $views
+ * @param int $fav
+ * @param int $uq_id
+ * @return  int
+ */
+function set_clenMainData($pdo, $name, $ref, $downloads, $views, $fav, $uq_id){
+    $dir  = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = "INSERT INTO clen SET 
+              name = :name,
+              ref  = :ref,
+              downloads = :downloads,
+              views = :views,
+              fav = :fav,
+              dateq = NOW(),
+              uq_id = :uq_id;";
+        $s = $pdo->prepare($sql);
+        $s->bindValue(":name", $name);
+        $s->bindValue(":ref", $ref);
+        $s->bindValue(":downloads", $downloads);
+        $s->bindValue(":views", $views);
+        $s->bindValue(":fav", $fav);
+        $s->bindValue(":uq_id", $uq_id);
+        $s->execute();
+
+    }catch (PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении clenMainData', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+/**
+ * @param  PDO $pdo
+ * @param string $ref
+ * @param string $name
+ * @param int $hindex
+ * @param int $uq_id
+ * @return int
+ */
+function set_gsMainData($pdo, $ref, $name, $hindex, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'INSERT INTO gs SET
+                    ref = :ref,
+                    name = :name,
+                    hindex = :hindex,
+                    uq_id = :uq_id,
+                    dateq = NOW();';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':ref', $ref);
+        $s->bindValue(':name', $name);
+        $s->bindValue(':hindex', $hindex);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд в mainGS', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+
+
+
+function set_elibMainData($pdo, $name, $refid, $hindex, $uq_id){
+    $dir  = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = "INSERT INTO elib SET 
+              name = :name,
+              refid  = :refid,
+              hindex = :hindex,
+              dateq = NOW(),
+              uq_id = :uq_id;";
+        $s = $pdo->prepare($sql);
+        $s->bindValue(":name", $name);
+        $s->bindValue(":refid", $refid);
+        $s->bindValue(":hindex", $hindex);
+        $s->bindValue(":uq_id", $uq_id);
+        $s->execute();
+
+    }catch (PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении elibMainData', $e);
+        exit();
+    }
+
+    return $pdo->lastInsertId();
+}
+
+/**
+ * @param PDO $pdo
+ * @param int $uq_id
+ * @return mixed
+ */
+function getUserQueryById($pdo, $uq_id){
+    $dir  = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM users_query WHERE
+                id = :uq_id';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch (PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getUQByID', $e);
+        exit();
+    }
+
+    return $s->fetch();
+}
+
+
+
+/**
+ * @param PDO $pdo
+ * @param int $user_id
+ * @param int $prior
+ * @return array();
+ */
+function get_UserQuery($pdo, $user_id, $prior){
+    $dir  = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM users_query WHERE
+                priorq = :priorq and user_id = :user_id';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':priorq', $prior);
+        $s->bindValue(':user_id', $user_id);
+        $s->execute();
+    }catch (PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getUQ', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  int $uq_id
+ * @return array
+ */
+function get_Clen($pdo, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM clen WHERE uq_id=:uq_id ORDER BY dateq DESC;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getClen', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  int $uq_id
+ * @return array
+ */
+function get_Elib($pdo, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM elib WHERE uq_id=:uq_id  ORDER BY dateq DESC;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getElib', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}/**
+ * @param PDO $pdo
+ * @param  int $uq_id
+ * @return array
+ */
+function get_gs($pdo, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM gs WHERE uq_id=:uq_id ORDER BY dateq DESC;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getGs', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  int $id
+ * @return array
+ */
+function get_ClenById($pdo, $id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM clen WHERE id=:id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':id', $id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getClenById', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param  int $id
+ * @return array
+ */
+function get_ElibById($pdo, $id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM elib WHERE id=:id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':id', $id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getElibById', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}/**
+ * @param PDO $pdo
+ * @param  int $id
+ * @return array
+ */
+function get_gsById($pdo, $id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM gs WHERE id=:id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':id', $id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getGsById', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $service
+ * @param int $sid
+ * @return mixed
+ */
+function getQuotes($pdo, $service, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM quotes_art WHERE service= :service and sid = :sid ORDER BY yearsquotes DESC ';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':service', $service);
+        $s->bindValue(':sid', $sid);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getQ', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $service
+ * @param int $sid
+ * @return mixed
+ */
+function getAuthor($pdo, $service, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM author_art WHERE service= :service and sid = :sid ORDER BY countart DESC;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':service', $service);
+        $s->bindValue(':sid', $sid);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getA', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $service
+ * @param int $sid
+ * @return mixed
+ */
+function getYears($pdo, $service, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM years_art WHERE service= :service and sid = :sid ORDER BY years DESC;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':service', $service);
+        $s->bindValue(':sid', $sid);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getY', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $service
+ * @param int $sid
+ * @return mixed
+ */
+function getOtherInfo($pdo, $service, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'SELECT * FROM other_info WHERE service= :service and sid = :sid;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':service', $service);
+        $s->bindValue(':sid', $sid);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении getOI', $e);
+        exit();
+    }
+
+    return $s->fetchAll();
+}
+
+/**
+ * @param PDO $pdo
+ * @param int $id_q
+ */
+
+ function del_Query($pdo, $id_q){
+     $dir = $_SERVER['DOCUMENT_ROOT'];
+     try{
+         $sql = 'DELETE FROM users_query WHERE id= :id;';
+         $s = $pdo->prepare($sql);
+         $s->bindValue(':id', $id_q);
+         $s->execute();
+     }catch(PDOException $e){
+         include $dir . '/includes/error_db.php';
+         set_error('Ошибка бд при выполнении delQ', $e);
+         exit();
+     }
+}
+
+/**
+ * @param PDO $pdo
+ * @param string $service
+ * @param int $uq_id
+ */
+function del_serviceData($pdo, $service, $uq_id){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'DELETE FROM ' . $service . ' WHERE uq_id= :uq_id;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':uq_id', $uq_id);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении delServData', $e);
+        exit();
+    }
+}
+
+/**
+ * @param PDO $pdo
+ * @param  string $info
+ * @param string $service
+ * @param int $sid
+ */
+function del_OtherInfo($pdo, $info, $service, $sid){
+    $dir = $_SERVER['DOCUMENT_ROOT'];
+    try{
+        $sql = 'DELETE FROM ' . $info . ' WHERE service= :service and sid = :sid;';
+        $s = $pdo->prepare($sql);
+        $s->bindValue(':service', $service);
+        $s->bindValue(':sid', (int) $sid);
+        $s->execute();
+    }catch(PDOException $e){
+        include $dir . '/includes/error_db.php';
+        set_error('Ошибка бд при выполнении delOI', $e);
+        exit();
+    }
+}
+
+<?php
+/**
+ * Created by PhpStorm.
+ * User: Aleksei Koltashev
+ * Date: 30.04.2016
+ * Time: 14:51
+ */
+//Константы ид пользователя, токен, имя пользователя берут из куков
+define('USERID', $_COOKIE['parseruserid']);
+define('TOKEN', $_COOKIE['parsertoken']);
+define('UNAME', $_COOKIE['parserusername']);
+define('HOSTNAME', 'parserorg.loc');
+mb_internal_encoding("UTF-8");
+function runAsync($url, $options= array()){
+    $fields = $options;
+
+    $curl_options = array(
+        CURLOPT_URL => $url,
+        CURLOPT_POST => 1,
+        CURLOPT_POSTFIELDS => http_build_query( $fields ),
+        CURLOPT_HTTP_VERSION => 1.0,
+        CURLOPT_HEADER => 0,
+        CURLOPT_TIMEOUT => 1
+    );
+    $curl = curl_init();
+    curl_setopt_array( $curl, $curl_options );
+    curl_exec( $curl );
+    curl_close( $curl );
+
+}
+
+function load_temp($includeName, $eventNavBtnOne, $eventNavBtnTwo, $textNavBtnOne, $textNavBtnTwo, $params= array()){
+    $rootDir = $_SERVER['DOCUMENT_ROOT'];
+    $inc = $includeName;
+    $eventNavBtn1 = $eventNavBtnOne;
+    $eventNavBtn2 = $eventNavBtnTwo;
+    $textNavBtn1 =  $textNavBtnOne;
+    $textNavBtn2 = $textNavBtnTwo;
+    include $rootDir . '/templates/template.html.php';
+    exit();
+}
+
+
+
+//Главная функиця для загрузки главной страницы
+function main(){
+    if(isset($_GET['enter'])  and !(USERID) and !UNAME and !TOKEN){
+        load_temp('login','?enter','?signup','Вход','Регистрация');
+    }
+    if(isset($_GET['signup']) and !(USERID) and !UNAME and !TOKEN){
+        load_temp('register','?enter','?signup','Вход','Регистрация');
+    }
+    if(isset($_GET['registry']) and !TOKEN and  !UNAME and !USERID ){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/auth.php';
+        include_once 'includes/cookies.php';
+        $pdo = db_connect();
+        $pass = $_POST['pass'];
+        $name = $_POST['name'];
+        $email = mb_strtolower($_POST['email'], "UTF-8");
+        $type = $_POST['acctype'];
+        if($email and isValid_email($pdo, $email)){
+           $userid =  registry_user($pdo, $name ,$email,$pass);
+           $token =  set_tokenDB($pdo,$userid);
+            set_cookies($userid,$token,$name);
+            $gsref = isset($_POST['gsRef'])?$_POST['gsRef']:'none';
+            $clenref = $_POST['clenRef'];
+            $elibref = $_POST['elibRef'];
+            $id_query = registry_userquery($pdo,$name,$gsref,$clenref, $elibref,  1, $type, $userid);
+            if($type == 'org'){
+            runAsync(HOSTNAME . '/elib/index.php',array('setElib'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+            runAsync(HOSTNAME . '/clen/index.php',array('setClen'=>true,'qtext' => $clenref, 'uq_id' => $id_query));
+            }
+            if($type == 'user'){
+                runAsync(HOSTNAME . '/elib/index_user.php',array('setElibUser'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+                runAsync(HOSTNAME . '/clen/index_user.php',array('setClenUser'=>true,'clenref' => $clenref, 'uq_id' => $id_query));
+                runAsync(HOSTNAME . '/gs/index_user.php',array('setgsUser'=>true,'gsref' => $gsref, 'uq_id' => $id_query));
+            }
+
+            
+        }else{
+            load_temp('register','?enter','?signup','Вход','Регистрация',array('mes'=>'Пользователь с таким email уже зарегистрирован'));
+        }
+        header('Location: . ');
+        exit();
+    }
+
+    if(isset($_GET['login']) and !TOKEN and  !UNAME and !USERID){
+        include_once 'includes/cookies.php';
+        include_once 'includes/auth.php';
+        include_once 'includes/dbconnect.php';
+        $pdo = db_connect();
+        $email = mb_strtolower($_POST['email'],"UTF-8");
+        $pass = $_POST['pass'];
+        $rowus = login($pdo,$email,$pass);
+        if($rowus){
+        $token = set_tokenDB($pdo,$rowus['id']);
+        set_cookies($rowus['id'],$token,$rowus['name']);
+        } else {
+            load_temp('login','?enter','?signup','Вход','Регистрация',array('mes'=>'Неверный email или пароль'));
+        }
+        header('Location: . ');
+        exit();
+    }
+
+    if(isset($_GET['outlogin'])){
+        include_once 'includes/cookies.php';
+        include_once 'includes/dbconnect.php';
+        $pdo = db_connect();
+        delete_tokenDB($pdo, TOKEN, USERID);
+        set_cookies('','','');
+        header('Location: . ');
+        exit();
+    }
+
+    if(isset($_GET['reg_uq'])){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/auth.php';
+
+        $pdo = db_connect();
+        $name = $_POST['name'];
+        $type = $_POST['acctype'];
+        $gsref = isset($_POST['gsRef'])?$_POST['gsRef']:'none';
+        $clenref = $_POST['clenRef'];
+        $elibref = $_POST['elibRef'];
+        $id_query = registry_userquery($pdo,$name,$gsref,$clenref, $elibref,  0, $type, USERID);
+        if($type == 'org'){
+            runAsync(HOSTNAME . '/elib/index.php',array('setElib'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+            runAsync(HOSTNAME . '/clen/index.php',array('setClen'=>true,'qtext' => $clenref, 'uq_id' => $id_query));
+        }
+        if($type == 'user'){
+            runAsync(HOSTNAME . '/elib/index_user.php',array('setElibUser'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+            runAsync(HOSTNAME . '/clen/index_user.php',array('setClenUser'=>true,'clenref' => $clenref, 'uq_id' => $id_query));
+            runAsync(HOSTNAME . '/gs/index_user.php',array('setgsUser'=>true,'gsref' => $gsref, 'uq_id' => $id_query));
+        }
+        sleep(7);
+        header('Location: . ');
+        exit();
+        }
+
+    if(isset($_GET['getInfo']) and USERID and TOKEN){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/main_data.php';
+        include_once 'includes/cookies.php';
+        $pdo = db_connect();
+        if(USERID and TOKEN and isValid_cookie($pdo, USERID, TOKEN)){
+            $uq_id = $_GET['uq_id'];
+            $uqArr = getUserQueryById($pdo, $uq_id);
+            $type = $uqArr['typeq'];
+            $query = array();
+            if($uqArr) {
+                $query[] = get_UserQuery($pdo, USERID, 1);
+                $query[] = get_UserQuery($pdo, USERID, 0);
+                if ($type == 'org') {
+                    $serv['elib'] = get_Elib($pdo, $uq_id);
+                    $serv['clen'] = get_Clen($pdo, $uq_id);
+                }
+                if ($type == 'user') {
+                    $serv['elib'] = get_Elib($pdo, $uq_id);
+                    $serv['clen'] = get_Clen($pdo, $uq_id);
+                    $serv['gs'] = get_gs($pdo, $uq_id);
+                }
+                load_temp('article', '#', '?outlogin', UNAME, 'Выход', array('query' => $query, 'serv' => $serv, 'type' => $type));
+            }else{
+                header("Location: .");
+                exit();
+            }
+        }else{
+            header("Location: .");
+            exit();
+        }
+    }
+
+    if(isset($_GET['update']) and USERID and TOKEN){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/main_data.php';
+        include_once 'includes/cookies.php';
+        $pdo = db_connect();
+        if(USERID and TOKEN and isValid_cookie($pdo, USERID, TOKEN)){
+            $id_query = $_GET['uq_id'];
+            $uqArr = getUserQueryById($pdo, $id_query);
+            $type= $uqArr['typeq'];
+            $gsref= $uqArr['gs_ref'];
+            $elibref = $uqArr['elib_ref'];
+            $clenref = $uqArr['clen_ref'];
+
+            if($type == 'org'){
+                runAsync(HOSTNAME . '/elib/index.php',array('setElib'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+                runAsync(HOSTNAME . '/clen/index.php',array('setClen'=>true,'qtext' => $clenref, 'uq_id' => $id_query));
+            }
+            if($type == 'user'){
+                runAsync(HOSTNAME . '/elib/index_user.php',array('setElibUser'=>true,'ref_id' => $elibref, 'uq_id' => $id_query));
+                runAsync(HOSTNAME . '/clen/index_user.php',array('setClenUser'=>true,'clenref' => $clenref, 'uq_id' => $id_query));
+                runAsync(HOSTNAME . '/gs/index_user.php',array('setgsUser'=>true,'gsref' => $gsref, 'uq_id' => $id_query));
+            }
+            sleep(7);
+            header('Location: . ');
+            exit();
+        }else{
+
+            header('Location: . ');
+            exit();
+        }
+    }
+    
+    if(isset($_GET['del'])  and USERID and TOKEN){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/main_data.php';
+        include_once 'includes/cookies.php';
+        $pdo = db_connect();
+        if(isValid_cookie($pdo, USERID, TOKEN)){
+            $id_query = $_GET['uq_id'];
+            $aelib = get_Elib($pdo, $id_query);
+            $aclen = get_Clen($pdo, $id_query);
+            $ags = get_gs($pdo, $id_query);
+            foreach ($aelib as $item){
+                $sid = $item['id'] * 1;
+                del_OtherInfo($pdo,'author_art' , 'elib' , $sid);
+                del_OtherInfo($pdo,'other_info' , 'elib' , $sid);
+                del_OtherInfo($pdo,'quotes_art' , 'elib' , $sid);
+                del_OtherInfo($pdo,'years_art' , 'elib' , $sid);
+            }
+            foreach ($aclen as $item){
+                $sid = $item['id'] * 1;
+                del_OtherInfo($pdo,'author_art' , 'clen' , $sid);
+                del_OtherInfo($pdo,'other_info' , 'clen' , $sid);
+                del_OtherInfo($pdo,'quotes_art' , 'clen' , $sid);
+                del_OtherInfo($pdo,'years_art' , 'clen' , $sid);
+            }
+            foreach ($ags as $item){
+                $sid = $item['id'] * 1;
+                del_OtherInfo($pdo,'author_art' , 'gs' , $sid);
+                del_OtherInfo($pdo,'other_info' , 'gs' , $sid);
+                del_OtherInfo($pdo,'quotes_art' , 'gs' , $sid);
+                del_OtherInfo($pdo,'years_art' , 'gs' , $sid);
+            }
+
+            del_serviceData($pdo,'gs', $id_query);
+            del_serviceData($pdo,'elib', $id_query);
+            del_serviceData($pdo,'clen', $id_query);
+            del_Query($pdo, $id_query);
+        }
+        header('Location: . ');
+        exit();
+        
+    }
+
+    if(isset($_GET['getStat'])){
+        include_once 'includes/dbconnect.php';
+        include_once 'includes/main_data.php';
+        $pdo = db_connect();
+        $service = $_GET['service'];
+        $type = $_GET['type'];
+        $sid = $_GET['sid'];
+        $serv = array();
+        $quotes = array();
+        $author = array();
+        $years = array();
+
+        $quotes = getQuotes($pdo, $service, $sid);
+        $years = getYears($pdo, $service, $sid);
+        $author = getAuthor($pdo, $service, $sid);
+        $otherinfo = getOtherInfo($pdo, $service, $sid);
+        switch ($service){
+            case 'elib':
+                $serv['elib'] = get_ElibById($pdo, $sid);
+                load_temp('elibTb','#','?outlogin',UNAME,'Выход', array('type'=>$type, 'serv' => $serv,
+                    'years'=>$years, 'authors'=>$author, 'quotes'=>$quotes, 'otherInfo'=> $otherinfo));
+
+                break;
+            case 'gs':
+                $serv['gs'] = get_gsById($pdo, $sid);
+                load_temp('gsTb','#','?outlogin',UNAME,'Выход', array('type'=>$type, 'serv' => $serv, 'years'=>$years, 'quotes'=>$quotes));
+
+                break;
+            case 'clen':
+                $serv['clen'] = get_ClenById($pdo, $sid);
+                load_temp('clenTb','#','?outlogin',UNAME,'Выход', array('type'=>$type,
+                    'serv' => $serv, 'years'=>$years,
+                    'authors'=>$author, 'otherInfo'=>$otherinfo));
+                break;
+        }
+
+
+    }
+
+    if(isset($_GET['getCSV'])){
+        $dir = $_SERVER['DOCUMENT_ROOT'];
+        include_once $dir . '/includes/generics.php';
+        $na = iconv('utf-8', 'windows-1251',  $_GET['name']);
+        $na =  iconv('windows-1251', 'utf-8',  $na);
+        echo iconv('windows-1251', 'utf-8',HTML_to_CSV($_POST['texth'], $na));
+        exit();
+    }
+
+
+    If(USERID and TOKEN and UNAME){
+        include_once 'includes/cookies.php';
+        include_once 'includes/dbconnect.php';
+        $pdo = db_connect();
+        if(isValid_cookie($pdo,USERID, TOKEN)){
+            include_once 'includes/main_data.php';
+            $query = array();
+            $serv = array();
+            $query[] = get_UserQuery($pdo, USERID, 1);
+            $query[] = get_UserQuery($pdo, USERID, 0);
+            $type = $query[0][0]['typeq'];
+            $uq_id = $query[0][0]['id'];
+            if($type == 'org'){
+                $serv['elib'] = get_Elib($pdo, $uq_id);
+                $serv['clen'] = get_Clen($pdo, $uq_id);
+            }
+            if($type == 'user'){
+                $serv['elib'] = get_Elib($pdo, $uq_id);
+                $serv['clen'] = get_Clen($pdo, $uq_id);
+                $serv['gs'] = get_gs($pdo, $uq_id);
+            }
+            
+            load_temp('article','#','?outlogin',UNAME,'Выход', array('query'=>$query, 'serv' => $serv, 'type'=> $type));
+        }else{
+            set_cookies('','','');
+            header('Location: . ');
+            exit();
+        }
+    }
+    load_temp('main','?enter','?signup','Вход','Регистрация');
+}
+
+main();
+
+
